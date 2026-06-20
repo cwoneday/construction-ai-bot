@@ -448,3 +448,45 @@ flowchart TD
 - [TODO] 채소연 엔진 — "따뜻한 멘토형 조력자 + 고객 북돋는" 결. 후보 Mr. Rogers·Bob Ross(이전 "차분하다"고 제외했으나 결 변경으로 복귀).
 - [TODO] 채소연 엔진 정해지면 v2 SOUL.md 일괄 파일화(8인).
 - (유지) 크라이시스 가드 한국 위기 자원 번호 · DST 점검 · GitHub 리포명(0순위 중).
+
+
+# 설계 기록 — 체크포인트12 델타 (0순위 설치 완료 · 슬랙 양방향 통과)
+
+> 직전: CP11(v1 SOUL 패키지 완성) · 본 델타: 2026-06-20
+> 성격: 실행 기록(설치·디버깅). 통과 기준 충족.
+> 환경: 맥미니 봇 전용 로컬 계정 `j.a.r.v.i.s`(아이클라우드 미로그인), 모니터 직접 연결.
+
+## A. 설치 스택 (검증된 명령)
+- [확정] 잠자기 끄기: `sudo pmset -a sleep 0`
+- [확정] Homebrew → 애플 실리콘은 설치 후 "Next steps"의 PATH 2줄(`.zprofile` echo + `eval brew shellenv`) 실행 필수.
+- [확정] Node.js: `brew install node` → v26.3.1
+- [확정] OpenClaw: `npm install -g openclaw` → 2026.6.8
+- [확정] 온보딩: `openclaw onboard --install-daemon` (QuickStart)
+  - 모델: 기본이 `claude-opus-4-8`로 잡힘 → `anthropic/claude-sonnet-4-6`으로 변경(비용 안전 기본값, 개별 에이전트에서 필요시 상향).
+  - 채널: Slack(Socket Mode), `xoxb-`/`xapp-` 입력.
+  - allowlist: `#daily-briefing` (비공개 채널, id `C0BBUT8ERFX`).
+  - 웹검색·스킬·훅: 모두 skip (v1 최소 구성).
+  - 게이트웨이 데몬: LaunchAgent `ai.openclaw.gateway`, 포트 18789, bind loopback.
+- [확정] doctor 정리: 미가용 스킬 43개 비활성, `memorySearch.enabled=false`(OpenAI 키 불필요화).
+
+## B. 슬랙 연결 디버깅 — 5단계 (핵심 학습)
+1. [해결] Anthropic API 차단 = 콘솔의 월 지출 한도($20) 도달. 크레딧 잔액 문제 아님. 한도 $50로 상향 → 해제. (반복 패턴이므로 봇용 적정 한도 재점검 필요 — §7 연계)
+2. [해결] 비공개 채널 미수신 = `groups:read`/`groups:history` 부족. 비공개는 `channels:*`와 권한 별개. 처음 User Token Scopes에 오배치 → Bot Token Scopes로 이동 + Reinstall.
+3. [해결] 이벤트 구독 누락 = Event Subscriptions에 `message.groups`·`message.channels` 추가(기존 `app_mention`·`message.im`만으론 채널 일반 메시지 미수신).
+4. [확인] 페어링 무관 = `openclaw pairing list --channel slack` → no pending.
+5. [해결·최종범인] allowlist 채널 키 불일치 = config의 `channels.slack.channels` 키가 이름(`#daily-briefing`)이라, 들어오는 채널 ID(`C0BBUT8ERFX`)와 매칭 실패 → 메시지 무음 폐기(로그에 미기록). `openclaw config set channels.slack.channels.C0BBUT8ERFX.enabled true`로 ID 등록 → 통과.
+
+## C. 진단 원칙 (재사용 가능)
+- [학습] 로그에 수신 라인이 없음 = 처리 실패가 아니라 "이벤트 미도달". 권한이 아닌 수신 경로(구독·allowlist)를 의심.
+- [학습] 읽기 권한(scope) / 이벤트 통보(subscription) / allowlist 필터는 독립. 셋 다 정렬돼야 수신.
+- [학습] 설정 변경 후 `openclaw gateway restart` 필수. 슬랙 스코프 변경 후 Reinstall 필수.
+- [학습] raw 로그를 직접 볼 것(`tail`/`grep`). 봇이 요약한 로그는 디버깅에 부정확할 수 있음.
+
+## D. 통과 판정
+- [확정] 0순위 통과 기준("슬랙에서 메시지 → 봇 응답") 충족. 슬랙 `daily-briefing`에서 메시지 전송 시 봇 응답 확인.
+
+## (미해결 항목)
+- [TODO] 게이트웨이 토큰 rotate: `openclaw doctor --generate-gateway-token` (설치 중 토큰 노출, 127.0.0.1라 외부노출 아님이나 갱신 권장).
+- [TODO] 1순위: 이한나·송태섭 SOUL 패키지를 workspace 배치 → 기본봇을 이한나 인격으로. (현재는 인격 없는 기본 봇)
+- [TODO] 2순위: 브리핑 파이프라인(시세 수집→§11 5칸→이한나 검증→발송), 크론 06:00 KST.
+- [TODO] 봇용 Anthropic 지출 한도 적정선 재설정(§7), 채소연 엔진, v2 SOUL 파일화, 한국 위기번호, DST, 리포명.
