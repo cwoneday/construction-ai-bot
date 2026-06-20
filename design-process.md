@@ -454,7 +454,7 @@ flowchart TD
 
 > 직전: CP11(v1 SOUL 패키지 완성) · 본 델타: 2026-06-20
 > 성격: 실행 기록(설치·디버깅). 통과 기준 충족.
-> 환경: 맥미니 봇 전용 로컬 계정 `j.a.r.v.i.s`(아이클라우드 미로그인), 모니터 직접 연결.
+> 환경: 맥미니 봇 전용 로컬 계정 `*****`(아이클라우드 미로그인), 모니터 직접 연결.
 
 ## A. 설치 스택 (검증된 명령)
 - [확정] 잠자기 끄기: `sudo pmset -a sleep 0`
@@ -464,9 +464,9 @@ flowchart TD
 - [확정] 온보딩: `openclaw onboard --install-daemon` (QuickStart)
   - 모델: 기본이 `claude-opus-4-8`로 잡힘 → `anthropic/claude-sonnet-4-6`으로 변경(비용 안전 기본값, 개별 에이전트에서 필요시 상향).
   - 채널: Slack(Socket Mode), `xoxb-`/`xapp-` 입력.
-  - allowlist: `#daily-briefing` (비공개 채널, id `C0BBUT8ERFX`).
+  - allowlist: `#daily-briefing` (비공개 채널, id `C0*********`).
   - 웹검색·스킬·훅: 모두 skip (v1 최소 구성).
-  - 게이트웨이 데몬: LaunchAgent `ai.openclaw.gateway`, 포트 18789, bind loopback.
+  - 게이트웨이 데몬: LaunchAgent `ai.openclaw.gateway`, 포트 *****, bind loopback.
 - [확정] doctor 정리: 미가용 스킬 43개 비활성, `memorySearch.enabled=false`(OpenAI 키 불필요화).
 
 ## B. 슬랙 연결 디버깅 — 5단계 (핵심 학습)
@@ -474,7 +474,7 @@ flowchart TD
 2. [해결] 비공개 채널 미수신 = `groups:read`/`groups:history` 부족. 비공개는 `channels:*`와 권한 별개. 처음 User Token Scopes에 오배치 → Bot Token Scopes로 이동 + Reinstall.
 3. [해결] 이벤트 구독 누락 = Event Subscriptions에 `message.groups`·`message.channels` 추가(기존 `app_mention`·`message.im`만으론 채널 일반 메시지 미수신).
 4. [확인] 페어링 무관 = `openclaw pairing list --channel slack` → no pending.
-5. [해결·최종범인] allowlist 채널 키 불일치 = config의 `channels.slack.channels` 키가 이름(`#daily-briefing`)이라, 들어오는 채널 ID(`C0BBUT8ERFX`)와 매칭 실패 → 메시지 무음 폐기(로그에 미기록). `openclaw config set channels.slack.channels.C0BBUT8ERFX.enabled true`로 ID 등록 → 통과.
+5. [해결·최종범인] allowlist 채널 키 불일치 = config의 `channels.slack.channels` 키가 이름(`#daily-briefing`)이라, 들어오는 채널 ID(`*********`)와 매칭 실패 → 메시지 무음 폐기(로그에 미기록). `openclaw config set channels.slack.channels.C0*********.enabled true`로 ID 등록 → 통과.
 
 ## C. 진단 원칙 (재사용 가능)
 - [학습] 로그에 수신 라인이 없음 = 처리 실패가 아니라 "이벤트 미도달". 권한이 아닌 수신 경로(구독·allowlist)를 의심.
@@ -508,12 +508,12 @@ flowchart TD
 - 외부 노출 = **직접 포트포워딩 금지**(VNC 5900 노출은 상시 스캔 표적). Tailscale 사설 터널로만.
 
 ## C. 윈도우 뷰어 [확정]
-- RealVNC 기각: Bonjour(`mdnsNSP.dll`) 손상으로 `0xc0000428` 실행 오류. 또한 무료 플랜이 계정·클라우드 경유라 격리 원칙과 덜 맞고, 우리는 IP 직결만 필요.
+- RealVNC 기각: Bonjour(`mdnsNSP.dll`) 손상으로 `0xc00xxxxx` 실행 오류. 또한 무료 플랜이 계정·클라우드 경유라 격리 원칙과 덜 맞고, 우리는 IP 직결만 필요.
 - TightVNC 채택: 무료(오픈소스)·계정/체험 없음·IP 직결. **Viewer만 설치**(노트북은 보는 쪽, 서버 불필요=불필요한 노출 차단).
 
 ## D. 네트워크 [확정]
-- 맥미니 내부 IP: `192.168.29.140` (같은 와이파이 전용, 공유기가 재배정 가능).
-- 맥미니 Tailscale IP: `100.89.183.29` (고정 — 기기 재등록/계정 변경 시에만 변경). tailnet 내부에서만 라우팅됨(공개 주소 아님).
+- 맥미니 내부 IP: `192.168.xx.xxx` (같은 와이파이 전용, 공유기가 재배정 가능).
+- 맥미니 Tailscale IP: `100.xx.xxx.xx` (고정 — 기기 재등록/계정 변경 시에만 변경). tailnet 내부에서만 라우팅됨(공개 주소 아님).
 - 양쪽(맥미니+노트북) Tailscale 설치 + 동일 계정 로그인으로 동일 tailnet 묶음.
 
 ## E. 개념·운영 규칙 [확정]
@@ -522,8 +522,8 @@ flowchart TD
 - 종료: 평소 TightVNC 창만 닫으면 됨(봇 데몬 안 꺼짐). Tailscale은 켜둬도 안전(사설·암호화)이라 매번 끊을 필요 없음.
 
 ## F. 검증 [확정]
-- 내부망: 같은 와이파이에서 `192.168.29.140` 접속 성공.
-- 외부망: 핫스팟에서 `192.168...`은 실패(정상, 내부 주소라 도달 불가) → `100.89.183.29`로 접속 성공.
+- 내부망: 같은 와이파이에서 `192.168.xx.xxx` 접속 성공.
+- 외부망: 핫스팟에서 `192.168...`은 실패(정상, 내부 주소라 도달 불가) → `100.**.***.**`로 접속 성공.
 
 ## (미해결 항목)
 - [TODO·보안] 외부 접속 열렸으므로: VNC 강한 암호 유지 + Tailscale 계정 2FA(§6.x 보안 점검에 편입).
