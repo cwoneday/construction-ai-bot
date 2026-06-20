@@ -371,3 +371,41 @@ flowchart TD
 - [TODO] DST 점검(06:00 KST 서머타임 영향, 0순위 중).
 - [TODO] GitHub 리포명 확정(buksan-secretary 미확정, 0순위 중).
 - [TODO] 채소연 역할·엔진(V2), v2 8인 SOUL.md 파일화.
+
+- # 설계 기록 — 체크포인트9 델타 (준비물 발급·설치 직전)
+
+> 직전: CP8(V1 착수 준비) · 본 델타: 2026-06-19
+> 성격: 실행 셋업 기록(키·토큰·원격 환경). 설계 변경 아님.
+
+## A. 윈도우 노트북 설치물
+- [확정] VNC 뷰어만 설치(RealVNC Viewer 권장 / TightVNC 대안). 나머지는 브라우저(키 발급 + claude.ai).
+- [확정] OpenClaw·Node·Homebrew는 윈도우 미설치 — 전부 맥미니(봇 몸통).
+- [추론] Tailscale은 집 밖 원격 시에만, 후순위.
+
+## B. 원격 제어 (윈도우 → 맥미니)
+- [확정] 맥미니 "화면 공유"(VNC 서버 내장) ON + 윈도우 VNC 뷰어로 접속. 같은 네트워크 기본.
+- [확정] 첫 설치는 맥미니에 모니터·키보드 직접 연결 → 설치 후 헤드리스 전환.
+
+## C. 슬랙 앱·토큰 발급 (완료)
+- [확정] 절차: api.slack.com/apps → Create New App → From scratch → 앱명·워크스페이스.
+- [확정] Bot Token Scopes: chat:write, app_mentions:read, im:history, im:read, im:write, channels:history, channels:read. (최소 권한, 부족 시 추가)
+- [확정] Install to Workspace → 봇 토큰 `xoxb-` 확보.
+- [확정] Socket Mode ON(공개 URL 없는 아웃바운드 = 미노출 원칙 정합).
+- [확정] App-Level Token(connections:write) → 앱 토큰 `xapp-` 확보(1회 표시).
+- [확정] Event Subscriptions: message.im (+ app_mention).
+- [확정] App Home: 메시지 탭 전송 허용 ON.
+- [주의] 스코프/이벤트 변경 시 Reinstall to Workspace 필수.
+- 결과: 토큰 2종(xoxb-/xapp-) 확보.
+
+## D. Anthropic
+- [확정] API 키 발급 + 크레딧 충전(종량제, 소액). v1 비용 설계(하루 1회 크론·상한)대로면 소비 적음.
+
+## E. 보안
+- [확정] 슬랙 토큰 2종·Anthropic 키 = 비밀값. .gitignore 제외, 맥미니 이전 후 노트북 메모 삭제, 노출 시 재발급(rotate).
+
+## 다음 단계
+- 맥미니 0순위 설치 착수: Homebrew → Node 22+ → OpenClaw 온보딩(슬랙·Anthropic 키·데몬). 통과 기준 = 슬랙 DM 응답.
+
+## (미해결 항목) 유지
+- [TODO] 크라이시스 가드 한국 위기 자원 번호 · DST 점검 · GitHub 리포명(0순위 중).
+- [TODO] 채소연 역할·엔진(V2), v2 8인 SOUL.md 파일화.
