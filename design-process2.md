@@ -113,3 +113,85 @@ Socket Mode→xapp / Bot Token Scopes 6개(chat:write·channels:read·channels:h
 - 보안: VNC 강한암호·Tailscale 2FA·토큰 SecretRefs 이전
 - 슬랙 owner 등록·allowlist에 유저ID(doctor 권고)
 - GitHub 리포명 확정
+
+  # 북산 비서실 v1 — CP15 깃허브용 (2026-06-21)
+
+> 아침 브리핑 파이프라인 6단계 전체 구현·실측·무인 자동화 — 전체 내용 + 결정 태그
+> 직전 CP14(1순위 SOUL 배치 + 시간버그 해결 + Claude Code 설치) 이후 ~ 2순위 완성까지의 델타.
+> 작업폴더 `~/buksan-briefing`. 진행방식 B(단계별 구현·실측). 봇 계정·호스트명·토큰·채널ID·IP는 마스킹.
+
+---
+
+## CP15. 아침 브리핑 파이프라인 — 6단계 전체 구현·실측·무인 자동화
+
+### 설계 기조 [확정]
+
+- **이한나 단일 창구 불변**: 이사장 ↔ 이한나만. 송태섭은 직보 안 함, 뒤에서 작성. 발송은 이한나 명의.
+- **최대 토큰 효율**: 봇을 깨우지 않고 스크립트가 Claude API 직접 호출. 수집·발송은 스크립트(공짜), LLM은 작성·검증만 2콜.
+- **호출 구조**: 스크립트가 송태섭→이한나를 API로 차례 호출(오케스트레이터=스크립트). CP4 "봇 위임"에서 변경 [승인].
+
+### 1단계 — 시세 `market_fetch.py` [확정]
+
+- Finnhub `/quote` 주력 → AV `GLOBAL_QUOTE` 폴백 → `unavailable`(값 안 지어냄).
+- 8티커: 지수 SPY·QQQ·DIA + 워치 AMD·ROKT·GLW·DELL·ORCL. watchlist config 분리.
+- KST 고정(timezone +9), `classify_trade_day()`로 휴장·주말 건너뛴 직전 거래일 판정. 장중 의심 시 `warning:intraday_possible` 별도 필드(status enum 안 깸).
+- 키 `.env` 분리, 로그 키 비노출. 종료코드 키없음=3·전실패=4.
+- **첫 실행 8/8 OK 전부 Finnhub(폴백 0), exit0.** ROKT 유효(close 117.58), Juneteenth(6/19)+주말 건너뛰고 trade_day=6/18.
+
+### 2단계 — 뉴스 `news_fetch.py` [확정]
+
+- AV News & Sentiment(시세 백업 AV키 재사용). topic 2개(economy_macro+financial_markets) 각 10건=20건, `sort=RELEVANCE`, 지난 24h.
+- **relevance_rank 보존**(AV 관련도 topic별 1~10). 저장은 published_kst 최신순·rank 독립. note 메타로 "순서≠중요도, 선별은 내용 기준" 명시.
+- 개별 종목 노이즈는 수집에서 안 거름 → 송태섭 몫(설계 원칙) [확정].
+- **첫 실행 2/2 topic OK.** AV 무료 티어가 topic 필터 받아줌(관문 통과). 중복 제거 동작.
+
+### 3·4·5단계 — `briefing_llm.py` (파이프라인 두뇌) [확정]
+
+- 스크립트가 송태섭·이한나를 Claude API 차례 호출. 평시 LLM 2콜, 반려 시 최대 4콜.
+- SOUL 실제 파일에서 읽음(`read_soul_core`): scout/main의 SOUL.md+IDENTITY.md+USER.md만(없으면 exit5 위조 방지). AGENTS/TOOLS/HEARTBEAT 제외.
+- 모델 claude-sonnet-4-6, **thinking=disabled + effort=low**(adaptive 토큰 낭비 회피) [승인].
+- **캐싱 끔** [승인]: 평시 cache_read=0이라 캐싱이 손해(+$0.004) → 기조 "최대 효율"에 맞춰 끔.
+- 이한나 검증 = **structured output**(JSON schema passed/failed_criteria/reason)으로 게이트 견고화. 재작성 금지(토큰 절약, output 23토큰).
+- **반려 = A안** [확정]: 1회 반려 후 재미달이면 "검증 미달 항목" 붙여 확정(무한 루프 금지).
+- **거시 경계 = A** [승인]: 거시 부족 시 섹터 테마로 유연하게 채우되 `[섹터 신호]` 명시, 개별 종목은 섹터 근거로만(단독 시황 금지).
+- **첫 실행**: 평시 2콜·이한나 1차 통과·exit0. 노이즈 17건 걸러냄(Dynamix·코카콜라·마카오 등 → AI 전환·반도체 랠리·AI 전력 인프라 3핵심). 수치 JSON 일치. ≈$0.076/회. 본문 우수(5칸·이사장 호칭·이모지 없음·한줄결론=상황 요약·투자 권유 없음·출처 표기).
+
+### 6단계 — 발송 `send_briefing.py` [확정]
+
+- 슬랙 `chat.postMessage` 직접. **이한나(Buksan Secretary) xoxb 토큰**(송태섭 아님). `auth.test`로 봇 신원 사전 확인.
+- md→슬랙 mrkdwn 변환(헤더→`*굵게*`, `**`→`*`, 표→코드블록, `---`→빈 줄). **TABLE_STYLE 상수**로 codeblock↔lines 전환 가능(폰 깨짐 대비).
+- 4000자 초과 시 스레드 분할. 실패 시 1회 재시도→실패 알림. `--notify-failure <단계>` 모드(마스터 호출용).
+- **첫 발송 성공**: daily-briefing에 이한나 명의 5칸 브리핑 게시(PC·폰 OK).
+
+### 7단계 — 마스터 + 크론 [확정]
+
+- `run_briefing.sh`: 절대경로 `PROJECT=/Users/*****/buksan-briefing`·`PY=/usr/bin/python3`, KST 날짜, `run_step()`로 4단계 순차(market→news→briefing_llm "$DATE"→send_briefing "$DATE"). 앞 단계 실패 시 슬랙 알림+exit1 중단. 로그 output/logs. `set -u`. 손 테스트 ALL OK.
+- **★크론 방식 = cron 확정(launchd 아님)** [확정 — 핵심 교훈]:
+  - launchd `gui/501`은 **헤드리스 로그인 윈도우**(`/dev/console` 소유자 root)라 `StartCalendarInterval` 미발사. GUI 세션이 active해야 발사되는데 봇 맥은 헤드리스. gateway는 KeepAlive 상시 데몬이라 캘린더 발사 능력을 검증 못 해줬음(착각 유발).
+  - 레거시 `load`·모던 `bootstrap` 둘 다 11:50·12:10 미발사 실측 확인 → **cron 전환**(시스템 cron 데몬, GUI 무관, sleep 0 확인됨).
+  - cron 12:20 임시 테스트 → **실측 발사 확인** → `crontab "0 6 * * *"` + `SHELL=/bin/bash` + `PATH` 명시 프로덕션 확정.
+  - **★교훈**: 헤드리스 봇 맥에선 GUI LaunchAgent 캘린더 안 됨 → cron 써야 함. (Claude Code MEMORY.md에 `macmini-headless-scheduling` 저장)
+- plist `RunAtLoad=false`(등록 시 즉시 실행 방지), StandardOut/ErrorPath를 로그 파일로(봇 plist의 /dev/null과 달리 크론 실패 원인 보존).
+
+### 키·설치 [확정]
+
+- 사용자가 nano로 `.env` 직접 입력: `SLACK_BOT_TOKEN`(이한나)·`SLACK_CHANNEL_ID`·`ANTHROPIC_API_KEY`. `grep -c your_=0` 확인.
+- **ANTHROPIC_API_KEY = 봇 키와 공유**($50 한도) [승인]: 봇·브리핑 둘 다 무인이라 같은 키. 코딩(Claude Code)만 구독으로 분리.
+- `pip3 install anthropic`(user 설치).
+
+### 비용 실측
+
+- 1회 ≈ $0.074(input ~16.5K·output ~1.7K, 2콜). 월 1회/일 ≈ ~$2.2.
+- ⚠️ 콘솔 Usage는 지연·집계 단위 때문에 1회를 정확히 못 떼어 보임(로그가 실측 진실). 봇 대화가 같은 키라 합산됨 → [TODO] 브리핑 전용 키 분리 검토 시 콘솔 추적 명확해짐.
+
+### 완성 상태
+
+**매일 06:00 KST 무인 자동: 시세 → 뉴스 → 송태섭 작성 → 이한나 검증 → 이한나 명의 슬랙 발송.**
+
+### 남은 TODO
+
+- output 누적 정리 정책(매일 JSON·로그 쌓임)
+- 봇 키 $50 한도 재점검(브리핑 LLM도 같은 키, 월 ~$2) / 브리핑 전용 키 분리 검토
+- 멘션 겹침 미세조정, 송태섭 응답 안정성 모니터
+- 채소연 엔진, v2 6인 SOUL 파일화
+- 보안(VNC 암호·Tailscale 2FA·토큰 SecretRefs), 슬랙 owner·allowlist 유저ID, 리포명
