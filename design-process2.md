@@ -263,3 +263,170 @@ Socket Mode→xapp / Bot Token Scopes 6개(chat:write·channels:read·channels:h
 - output 누적 정리 정책, 봇 키 $50 한도 재점검(브리핑 LLM도 같은 키·월 ~$2).
 - 채소연 엔진, v2 6인 SOUL 파일화, 보안(VNC 암호·Tailscale 2FA·토큰 SecretRefs), 슬랙 owner·allowlist, 리포명.
 
+# CP17 — 아침 브리핑 주간 모드(일요일/월요일) 추가
+
+**날짜:** 2026-06-22
+**선행:** CP15(아침 브리핑 6단계 무인 자동화 완성), CP16(무인 검증 + CDA/권준호 설계)
+**상태:** 3파일 코드 수정 완료 + 정적 검증 + weekday 통합 실행 검증 통과. sunday/monday end-to-end LLM 실행은 미수행(다음 세션).
+**작업 폴더:** `~/buksan-briefing` (`/Users/*****/buksan-briefing`)
+
+---
+
+## A. 목표와 설계 결정
+
+### A-1. 무엇을 추가했나
+평일(화~토) 아침 브리핑은 현행 일별 등락 유지. 한국시간 일요일·월요일 새벽에 "주간 모드"를 추가.
+
+- `[확정]` 일요일 = 이번 주 회고, 월요일 = 다음 주 전망
+- `[확정]` 시세 = 주간 등락(금→금). 정확히는 "각 주 마지막 거래일 종가" 기준
+- `[확정]` 뉴스 = 3모드 공통 지난 24h (현행 유지)
+- `[확정]` 모드 3개: `weekday`(화~토) / `sunday` / `monday`
+
+### A-2. 과거 종가 API 선택 — AV TIME_SERIES_DAILY 단독
+현행 시세 수집(Finnhub `/quote`, AV `GLOBAL_QUOTE`)은 "최신 스냅샷 + 전일"만 제공. 특정 과거 날짜 종가를 못 줌.
+
+- `[승인]` 과거 종가는 AV `TIME_SERIES_DAILY`(outputsize=compact) 단독 사용. Finnhub `/stock/candle`은 안 씀(무료 플랜 US 주식 candle 403 가능성, 키 등급 확인 회피)
+- `[추론]` AV 무료 한도 = 일 25콜 + 분당 5콜. 주간 모드 날 = 뉴스 2콜 + 과거종가 8콜 = 10콜 < 25 (여유). 평일은 weekly 조회 0콜 (가드 밖)
+
+### A-3. "지난주 금요일" 정의 — 주 마지막 거래일, 휴장 자동 흡수
+- `[승인]` 주간 등락률 = (이번주 마지막거래일 close − 지난주 마지막거래일 close) / 지난주 close × 100
+- `[승인]` "마지막 거래일" = 일별 시계열을 ISO 주차로 그룹핑 → 각 주 max(날짜). 금요일 휴장 시 목요일이 자동 선택됨(값 위조 없음, `classify_trade_day` 정신)
+
+### A-4. §칸 구성 (평일 5칸 골격 유지, 포커스만 변경)
+- `[확정]` 일요일(회고): 주간 시장요약 / 이번주 핵심흐름 3 / 주간 주목종목 / 잔존 리스크 / 한줄 회고
+- `[확정]` 월요일(전망): 지난주 마감요약 / 다음주 관전포인트 3 / 주시종목 / 예상 리스크 / 한줄 전망
+- `[확정]` 월요일만 "★전망 가드" 섹션 추가: "확인된 일정·이미 발표된 실적/이벤트 일정만 근거, 추측·예언 금지, 모르면 '확인된 일정 없음'으로". 일요일(회고)은 과거라 추측 위험 덜해 절대규칙에만 녹임
+- `[확정]` 주시종목 = "워치리스트 중"(현행 5종목 기준). 섹터 ETF(SMH/XLF 등) 추가는 watchlist 재설계라 별도 작업으로 보류 (길1=쉽게 가기)
+
+### A-5. 회귀 안전 원칙 (최우선)
+- `[확정]` 무인 시스템이므로 평일 경로 1바이트도 안 바뀜이 1순위
+- `[확정]` 모든 신규 로직은 `if weekly_mode` / `if mode in ("sunday","monday")` 가드 안에만. weekday는 가드를 안 탐
+- `[확정]` 인자 없거나 weekday면 폴백 → 기존 동작
+
+---
+
+## B. market_fetch.py 수정
+
+### B-1. 상수 추가
+```python
+AV_DAILY_URL = "https://www.alphavantage.co/query"  # TIME_SERIES_DAILY
+WEEKLY_MODES = ("sunday", "monday")
+AV_DAILY_SLEEP_SEC = 15  # 분당 5콜 제한 회피
+```
+
+### B-2. 신설 함수
+- `_last_trading_day_per_week(series)` — 일별 시계열을 ISO 주차(`isocalendar()[:2]`)로 그룹핑, 각 주 max(날짜) = 마지막 거래일. 최신 주 먼저 반환. 휴장 자동 흡수
+- `fetch_weekly_closes(ticker, av_key)` — AV `TIME_SERIES_DAILY` 단독. `this_week`/`last_week`(date·close)·`change`·`change_pct`·`source`. 실패/2주 미만/0 나누기 → `None`(위조 안 함). `Note`/`Information`(레이트리밋) → `RuntimeError`
+
+### B-3. main() 배선
+- `mode = sys.argv[1] if len(sys.argv) > 1 else "weekday"`, `weekly_mode = mode in WEEKLY_MODES`
+- `if weekly_mode:` 안에서만 8종목(indices+watchlist) weekly 조회. 콜 간 `time.sleep(15)`(`i > 0` 가드 = 첫 콜 대기 없음, 8콜 ≈ 105초, 무인이라 무방)
+- `output["mode"]` 항상 추가, `output["weekly"]`는 주간 모드만. 기존 `indices`/`watchlist` 블록 불변
+
+### B-4. 검증
+- `[확정]` ast 통과
+- `[확정]` ★SPY 손 검산: last 2026-06-12(741.75) → this 2026-06-18(746.74), change_pct = (746.74−741.75)/741.75×100 = 0.6727 코드값과 일치
+- `[확정]` ★Juneteenth(6/19 금) 휴장 → 목요일(6/18) 자동 흡수 실데이터 입증
+- `[확정]` weekday 회귀: 구조 차이 0, 소요 5.5초(sleep 안 탐 = 평일 영향 0)
+- `[추론]` sunday 첫 테스트 시 8종목 중 4종목만 성공(QQQ/AMD/GLW/ORCL는 분당 5콜 레이트리밋 unavailable). 버그 아님(설계대로 값 위조 안 하고 unavailable) → sleep으로 해결
+
+---
+
+## C. briefing_llm.py 수정
+
+### C-1. SCOUT_TASK → SCOUT_TASKS dict (편집 1)
+- `SCOUT_TASK`(단일 문자열) → `SCOUT_TASK_WEEKDAY`(변수명만 교체, 본문 불변) + `SCOUT_TASK_SUNDAY` + `SCOUT_TASK_MONDAY` 신설
+- `SCOUT_TASKS = {"weekday": ..., "sunday": ..., "monday": ...}`
+- `[확정]` weekday 본문 byte 동일 검증: 백업 `SCOUT_TASK` 1144자 == 현재 `SCOUT_TASK_WEEKDAY` 1144자, diff 0줄
+
+### C-2. call_scout (편집 2)
+- 시그니처에 `mode="weekday"` 추가(`reject_reason` 앞, 기존 호출이 키워드/미전달이라 순서 안 깨짐)
+- `task = SCOUT_TASKS.get(mode, SCOUT_TASK_WEEKDAY)` — 오타/미지정 폴백
+- 주간 모드면 user에 "weekly 필드(금→금 주간 등락) 기준" 한 줄 추가
+- `system=_system_blocks(soul_core, task)` — 기존 `SCOUT_TASK` 참조를 `task`로 교체 → NameError 해소(단독 `SCOUT_TASK` 출현 0)
+
+### C-3. call_hanna 당일자 완화 (편집 3)
+- 시그니처에 `mode="weekday"` 맨 끝 추가
+- `task = HANNA_TASK; if mode in ("sunday","monday"): task += 보정문`
+- 보정문: "'당일자' 기준은 '주간 데이터 허용'으로 해석. weekly 수치 기반이면 당일자 미달로 반려 말 것. 수치출처·무모순은 엄격히"
+- `[확정]` ★`CRITERIA` 리스트·`VERDICT_SCHEMA` enum의 "당일자"는 불변(byte 동일). 보정은 프롬프트 텍스트(`task`)로만 → 구조화 출력 스키마 무손상. VERDICT_SCHEMA는 CRITERIA 변수 참조(리터럴 아님)
+
+### C-4. main() 배선 (편집 4)
+- `mode = sys.argv[2] if len(sys.argv) > 2 else "weekday"` (argv[1]=date, argv[2]=mode)
+- 호출부 4곳에 `mode=mode` 키워드 전달: 콜1 작성(L397) · 콜2 검증(L402) · 콜3 재작성(L412) · 콜4 재검증(L417)
+
+### C-5. 검증
+- `[확정]` 매 편집 ast 통과, import OK
+- `[확정]` weekday 회귀: mode 폴백 → 4개 호출부 weekday → SCOUT_TASK_WEEKDAY + HANNA_TASK 원본, weekly 안내/보정문 안 붙음 = 평일 동작 불변
+
+---
+
+## D. run_briefing.sh 수정
+
+### D-1. 요일 판정 → MODE (편집 3-a)
+```bash
+DOW="$(TZ=Asia/Seoul date +%u)"   # 1=월 … 7=일
+case "$DOW" in
+  7) MODE="sunday" ;;
+  1) MODE="monday" ;;
+  *) MODE="weekday" ;;
+esac
+MODE="${MODE_OVERRIDE:-$MODE}"     # 테스트 훅
+```
+- `[추론]` 토요일(date +%u=6)은 `*` → weekday (한국 토요일 새벽 = 미국 금요일 마감, 평일과 동일)
+
+### D-2. 호출부 인자 전달 (편집 3-b)
+- `run_step market_fetch.py "$MODE"`, `run_step briefing_llm.py "$DATE" "$MODE"`. news_fetch는 인자 없이 그대로
+- `run_step` 정의(`$1`=스크립트, shift 후 `"$@"`)는 수정 불필요
+
+### D-3. SKIP_SEND 훅 (편집 3-c)
+```bash
+if [ "${SKIP_SEND:-0}" = "1" ]; then
+  log "SKIP_SEND=1 → 발송 단계 건너뜀 (테스트 전용)"
+else
+  run_step send_briefing.py "$DATE"   # 6단계: 슬랙 발송
+fi
+```
+- `[확정]` ★프로덕션 안전: SKIP_SEND 미설정 → 기본값 0 → `"0"="1"` 거짓 → else → 정상 발송. launchd 실전엔 영향 0. 테스트만 `SKIP_SEND=1`로 차단. 주석 방식(되돌리기 까먹으면 실전 발송 안 됨)보다 안전
+- `[확정]` `send_briefing.py` 자체는 안 건드림. run_briefing.sh에서 호출만 조건부
+
+### D-4. 검증
+- `[확정]` bash -n 통과, `run_step send_briefing.py` 1개(else 안, 중복 없음 — grep -cn 1)
+- `[확정]` 발송 분기 시뮬레이션: 미설정→발송 / =0→발송 / =1→건너뜀
+
+---
+
+## E. weekday 통합 실행 검증 (실제 LLM 호출)
+
+`SKIP_SEND=1 MODE_OVERRIDE=weekday ./run_briefing.sh`
+
+- `[확정]` 끝까지 에러 없이 완주 (market_fetch → news_fetch → briefing_llm → 발송 건너뜀 → ALL OK)
+- `[확정]` mode=weekday 로그(market_fetch·briefing_llm 둘 다), weekly 키 없음(has_weekly: False)
+- `[확정]` SKIP_SEND=1 발송 차단(슬랙 안 건드림)
+- `[확정]` 평일 5칸 정상("[섹터 신호]" 표기 포함), 이한나 1차 통과(2콜 종료, 반려 루프 안 탐)
+- `[확정]` LLM 2콜(input 16256, output 1394) ≈ $0.07 (평소 비용 부합)
+- **결론:** 정적 검증(ast/grep/bash -n) + 실행 검증 둘 다로 평일 경로 무손상 실증
+
+> 참고: 같은 날 06:00 launchd 프로덕션 실행 로그도 별도로 보임(4콜, 당일자 반려 후 통과) — 테스트(23:48)와 무관한 실전 무인 실행. 평일 시스템 정상 가동 중.
+
+---
+
+## F. 작업 패턴·교훈
+
+- `[확정]` measure-first: market_fetch가 과거 종가 낼 수 있는지 먼저 확인 후 설계 진입
+- `[확정]` 단계별 절차: 백업(0단계) → 한 편집씩 적용 전 텍스트 미리보기 → 적용 → ast/bash -n → 회귀 확인 → 다음
+- `[확정]` ★Claude Code str_replace가 old_string을 좁게 잡아 "기존 줄 안 지우고 추가" 중복 위험 반복(logger·sleep 루프·send 줄). diff 뷰어 디스플레이 잘림/중복 표시 빈번 → 매 편집 적용 후 `ast.parse`/`bash -n` + `grep -cn`으로 기계적 판정(말로 착시 논쟁 말 것). 특히 send 줄 중복은 잡지 않았으면 실전 슬랙 2회 발송
+- `[확정]` 편집마다 눈으로 확인(2번 "allow all edits"는 누르지 않음). 무인 시스템 수정의 안전장치
+- `[확정]` SyntaxError 시 자동 `.bak` 복구 훅을 검사 명령에 내장
+
+---
+
+## G. 미해결 / 다음 작업
+
+- `[TODO]` ★sunday/monday end-to-end 실제 LLM 실행 (`SKIP_SEND=1 MODE_OVERRIDE=sunday`(또는 monday) `./run_briefing.sh`) → 출력 품질 검증: 회고/전망 잘 나오나, 월요일 전망 가드가 추측 막나, 이한나가 주간 브리핑을 당일자로 반려 안 하나(로그 failed_criteria). 주의: AV weekly 8콜 + 한도(오늘 테스트로 소진 가능, 자정 리셋 후 권장) + LLM 2~4콜 비용. 머리 맑을 때 출력 읽고 판단 권장
+- `[TODO]` 섹터 ETF(SMH/XLF/XLE/XLK 등)를 watchlist에 추가 = 주시종목 진짜 섹터별로 (별도 작업, market_fetch 종목 재설계)
+- `[TODO]` 백업 `.bak` 파일 정리 정책
+- `[TODO]` (CP15~16 이월) output 누적 정리, 봇 키 $50 한도 재점검(브리핑 LLM 같은 키·월 ~$2)·전용 키 분리 검토, 실패 알림(--notify-failure) 실작동 테스트, 멘션 겹침·송태섭 응답 안정성, 채소연 엔진, v2 6인 SOUL 파일화, 보안(VNC 암호·Tailscale 2FA·토큰 SecretRefs), 슬랙 owner·allowlist 유저 ID·리포명, 직보 예외(안감독·권준호) 증가 시 이한나 창구 무의미 방지 기준
+- `[TODO]` (별도 프로젝트) CDA 엔진 WSL→맥미니 마이그레이션 + 권준호 TOOLS 호출부 채움 + showdown 채널 + Buksan Budongsan 앱
+
+**크론/launchd 스케줄은 이번 작업에서 안 건드림. 현재 평일 파이프라인 안전 보존(weekday 폴백).**
