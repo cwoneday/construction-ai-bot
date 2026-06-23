@@ -430,3 +430,142 @@ fi
 - `[TODO]` (별도 프로젝트) CDA 엔진 WSL→맥미니 마이그레이션 + 권준호 TOOLS 호출부 채움 + showdown 채널 + Buksan Budongsan 앱
 
 **크론/launchd 스케줄은 이번 작업에서 안 건드림. 현재 평일 파이프라인 안전 보존(weekday 폴백).**
+
+# V2 "분리하되 이어주기" — 안전장치(schg) 적용
+
+- **날짜**: 2026-06-23
+- **선행**: CP17(주간모드 코드 완료) · 메모리 #13(V2 방향) · CP16(봇은 시스템 못 바꾼다 실증)
+- **상태**: 안전장치 1차(로직 schg) 적용 완료 · 검증 통과 · 최종 검증(익일 06:00 자연 브리핑)은 관찰 대기
+- **범위**: V2 착수 — 봇 권한 조사 → 안전장치 설계 → schg 적용
+
+---
+
+## A. 배경 — V2 목표와 출발점
+
+**V2 "분리하되 이어주기"** = 슬랙에서 이한나(비서실장 봇)에게 말로 시키면 새벽 cron이 실제로 바뀌는 구조. 방식 B(설정파일 다리): 봇은 설정 데이터만 기록, cron은 돌 때마다 읽어 반영. 세 살림(cron 파이프라인 / OpenClaw 봇 / 엔진)은 분리 유지, config 파일 하나가 다리.
+
+**[확정]** V2 성립의 선결 조건 = 봇이 파일을 쓸 수 있나. 이를 확인하러 OpenClaw 설정을 조사(읽기 전용).
+
+---
+
+## B. 봇 권한 조사 — 무제한 발견
+
+**[확정] 봇 능력** (OpenClaw 설치본·설정 읽기로 확인)
+- 두 봇(이한나=main 오케스트레이터, 송태섭=scout) 모두 `tools.profile: "coding"` (설정 최상위, 개별 override 없음)
+- coding 프로파일이 켜는 도구: **파일쓰기**(write/edit/apply_patch) + **명령실행**(exec bash/process/code_execution) + 웹 + 메모리/세션 + cron + goal/plan/skill
+- `readonly` 프로파일이 따로 존재하는데 coding을 선택 = 쓰기·실행 풀세트가 의도적으로 ON
+
+**[확정] 권한/샌드박스**
+- `sandbox.mode = "off"` (설정에 sandbox 없어 기본값) + `workspaceAccess = "none"`
+- exec-filesystem-policy의 `isExecFilesystemConstrained`가 `sandboxMode !== "all"`이면 `return false` → 파일시스템 제약 비활성 → 봇이 워크스페이스 밖(`~/buksan-briefing` 등)도 자유롭게 read/write/exec
+- exec 승인: `exec-approvals.json` 파일 없음 → 기본 `security="full"` + `ask="off"` = full bypass = 명령 검사·승인 모두 생략
+
+**[확정] 결론**: 봇이 맥미니 전체에 무제한 권한, 승인 없음. `AGENTS.md`의 "Red Lines"는 행동 규범이지 코드 강제가 아님.
+
+**[확정] CP16 미스터리 해소**: 봇이 "시스템 못 바꾼다"던 것은 능력 부족이 아니라 **설계 부재**였음. 능력은 처음부터 있었음.
+
+---
+
+## C. 결정적 사실 — 브리핑은 봇과 분리
+
+**[확정]** 아침 브리핑은 봇이 아니라 시스템 crontab(`0 6 * * *` → run_briefing.sh → /usr/bin/python3)이 직접 돌림. 봇 exec 경로를 거치지 않음.
+- crontab도 봇도 같은 사용자
+- → 봇 권한을 잠가도 브리핑 무영향 (crontab은 로직 파일을 읽고 실행만, 쓰지 않음)
+- 이 분리가 안전장치 설계의 전제: 봇을 조여도 브리핑이 안 깨짐
+
+---
+
+## D. 안전장치 설계 — 옵션 비교
+
+검토 문서 `~/buksan-briefing/SECURITY_REVIEW.md`에 저장(읽기 전용 조사 + 제안).
+
+**[확정] 핵심 정정**: exec 통제와 파일쓰기 통제는 별개 통제선.
+- `exec-approvals.json`은 셸 명령(rm 등)만 막음
+- 봇의 write/apply_patch 직접 파일쓰기는 exec 통제로 못 막음 → 파일 자체를 OS/커널 레벨로 막아야 함
+
+**옵션 비교**
+
+| 옵션 | 막는 것 | 부작용 | 판정 |
+|---|---|---|---|
+| A: exec-approvals allowlist | 셸 명령 | 브리핑이 셸 쓰면 위험·목록 의존 | 2순위 보강 |
+| **B(채택): 로직만 schg** | **로직 손상·삭제 (write·exec 다)** | **거의 없음** | **★1순위** |
+| C: sandbox.mode="all" | 워크스페이스 밖 전부 | docker 의존·재시작·브리핑 파손 | 제외 |
+| (보류): config 잠금+sudoers | config 무검증 쓰기 | 같은 사용자 함정·복잡 | 보류 |
+
+**[확정] 발상 전환 — 잠글 대상 뒤집기**: config(데이터)는 열고 로직(*.py/*.sh)만 불변화.
+- 봇이 바꿔야 할 건 config뿐, 시스템 깨뜨리는 건 로직 손상
+- config 깨져도 이미 cron이 실패 감지 + 슬랙 알림(market_fetch가 config 읽다 실패 → run_step 중단) = 기존 안전장치로 커버
+- → update_config.py·sudoers·setuid 전부 불필요해짐
+
+**[확정] "같은 사용자는 자기를 못 잠근다" 함정**: config를 잠그면 같은 사용자로 도는 갱신 스크립트도 막힘. 단순 chmod는 봇이 도로 +w. macOS는 스크립트 setuid 무시. root 소유+sudoers는 복잡 → config 잠금 방식(B案) 보류 근거.
+
+---
+
+## E. schg 적용 — 실행 및 검증
+
+**[확정] 대상 분류** (적용 전 8개 파일 모두 플래그 없음 확인)
+- **잠금(로직 5개)**: briefing_llm.py · market_fetch.py · news_fetch.py · send_briefing.py · run_briefing.sh
+- **열어둠**: config.json(V2 대상) · output/ · *_spec.md · requirements.txt · .env
+- **.bak 3개**: schg 안 거는 것 권장 (cron이 안 쓰니 무결성 무관, 걸면 백업 정리 시 noschg 번거로움)
+
+**[확정] git 충돌 없음**: `~/buksan-briefing/`에 `.git` 없음(저장소 아님) → schg 충돌할 commit/checkout 없음.
+
+**[확정/적용] 적용** (사용자가 Terminal에서 sudo 직접 — root 권한이라 에이전트 불가)
+```
+sudo chflags schg \
+  <PROJECT>/briefing_llm.py \
+  <PROJECT>/market_fetch.py \
+  <PROJECT>/news_fetch.py \
+  <PROJECT>/send_briefing.py \
+  <PROJECT>/run_briefing.sh
+```
+- `ls -lO` 결과: 5개 모두 `schg` 플래그 확인
+- config.json: schg 명령에서 제외 → 열린 상태 유지
+
+**[확정/검증] 무부작용 검증 통과**
+```
+/usr/bin/python3 -B -m py_compile <4개 .py>   → PY OK
+bash -n run_briefing.sh                        → SH OK
+```
+- schg 걸려도 읽기·파싱 정상 = 실행 체인 안 깨짐 = 브리핑 무영향 실증
+- `-B`로 .pyc 캐시도 안 만듦
+
+**[확정] schg 동작 원리**: 읽기·실행 허용, 쓰기·삭제·이름변경·chmod·chflags만 차단(커널 레벨 EPERM). 파일 단위 차단이라 상위 폴더가 봇 소유여도 삭제·이름변경까지 막음. 봇이 스스로 noschg 불가(root 전용) = 핵심 방어.
+
+**[확정] 롤백**: `sudo chflags noschg <5개>` 한 줄, 즉시 복구. 재시작 불필요.
+
+---
+
+## F. 운영 규칙 변경
+
+**[확정] 로직 수정 절차 변경**: buksan-briefing 로직 5개가 불변화됨. 봇도 사용자도(sudo 없이) 수정·삭제 불가. 향후 로직 수정 필요 시(CP17 후속 등) 반드시 3단계:
+```
+sudo chflags noschg <파일>   # 잠금 해제
+# ... 수정 ...
+sudo chflags schg <파일>     # 재잠금
+```
+config.json은 그대로 쓰기 가능.
+
+**[추론] 적용 환경 주의**: schg 적용은 Terminal 앱 직접이 확실. Claude Code 세션 채팅창에 붙이면 텍스트로만 입력되고 실행 안 됨. `!` 접두는 sudo 비번 대화형 입력이 막힐 수 있음. (실제로 채팅창 붙여넣기로 1차 미적용 → Terminal에서 재실행 성공)
+
+---
+
+## 미해결 / 다음 작업
+
+- **[TODO] ★최종 검증**: 익일(6/24) 06:00 자연 브리핑 정상 도착 확인(하루 관찰) = schg 실전 무해 최종 입증
+- **[TODO] exec-approvals.json 추가**: 안전장치 2순위 보강(A). `security="allowlist"` + `ask="on-miss"` + `askFallback="deny"`. 허용목록 = 봇 90일 세션 로그의 실제 exec(cat/ls/which/diff/tail/env/printenv + openclaw status/gateway/dashboard 등). A는 셸만 통제, write/apply_patch는 schg가 막음 = 상호보완
+- **[TODO] 하루 관찰**: 봇 대화·메모리 정상 확인
+- **[TODO] ★V2 첫 기능 = mode_override**: "말로 시키면 바뀌는" 첫 입주자. config 읽기로 cron 안 건드리는 것부터. CP17 mode 구조 재활용
+- **[TODO] 보틀넥(첫 기능 설계 시)**: 동시성(atomic write), 의도 해석(봇 변경 전 확인), 롤백(이력)
+- **[TODO] cron 시각 변경**: 후순위. 봇 도구에 cron 있으나 내부 스케줄러인지 시스템 crontab 조작인지 미확인(나중 카드)
+- **[TODO] CP17 마무리**: sunday/monday end-to-end 실제 LLM 실행(출력 품질 검증). ⚠️ 이제 로직 schg라 수정 필요 시 noschg 먼저
+
+---
+
+## 원칙 (이번 적용에서 적용)
+
+- 위험 결정 정지: 시스템 권한 변경이라 머리 맑을 때 신중히
+- measure-first: 봇 권한·샌드박스·exec 정책을 코드로 직접 확인 후 설계
+- config 쓰기는 열되 로직 수정은 막기
+- 평일 브리핑 무손상 최우선
+- 안전장치가 본체를 안 깨뜨리는지 구조부터 검증(브리핑↔봇 분리 확인)
