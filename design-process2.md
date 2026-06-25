@@ -569,3 +569,141 @@ config.json은 그대로 쓰기 가능.
 - config 쓰기는 열되 로직 수정은 막기
 - 평일 브리핑 무손상 최우선
 - 안전장치가 본체를 안 깨뜨리는지 구조부터 검증(브리핑↔봇 분리 확인)
+
+북산 비서실 — exec-approvals 화이트리스트 적용 기록
+> 날짜: 2026-06-25
+> 선행: V2 안전장치 1차(schg) 적용 완료, 6/24 무인 브리핑 정상 검증
+> 상태: exec-approvals 적용 완료, 슬랙 승인 클라이언트 미작동 보류
+> 결정 태그: [확정] 이사장 명시 / [승인] 제안→승인 / [추론] 맥락 기본값 / [TODO] 미해결
+---
+A. 사전 점검 (점검 1~3)
+exec-approvals.json 적용 전, 봇의 실제 셸 사용 실태를 읽기 전용으로 조사했다.
+A-1. 웹 도구의 셸 의존성 [확정]
+web_search/web_fetch 구현 체인을 dist 끝까지 추적:
+최종 네트워크 계층: `fetch-guard` → `globalThis.fetch` (Node 내장) + `undici` (Node 내장 HTTP)
+child_process/exec/spawn/curl/wget: 전 구간 0건
+결론: curl을 allowlist에서 빼도 봇 웹 기능 안 깨짐 [확정]
+A-2. 봇 실제 exec 명령 목록화 [확정]
+데이터 범위: 2026-06-20~21 (실 세션 로그 약 2일치, 시드의 "90일"은 보관 한도와 불일치)
+봇	주요 바이너리	건수
+main (한나)	grep 162, head 142, openclaw 77, cat 58, env 54, python3 54, echo 44, rm 34, which 20, tail 15, ls 14, notion 10, ntn 10, printenv 10	278
+scout (송태섭)	cat 128, python3 112, ls 100, head 96, grep 80, echo 50, openclaw 48, tail 34, env 16, diff 16	292
+초안 대비 누락: grep, head, echo, python3, notion/ntn → 추가 필요 [확정]
+rm 34건: 전량 BOOTSTRAP.md 정리. allowlist 제외(ask 대상) [승인]
+openclaw 서브명령: status/gateway/dashboard — 기존 목록 그대로 [확정]
+A-3. curl/wget/nc 셸 사용 이력 [확정]
+양쪽 봇 0건. python3 내부까지 전수 검사(urllib/requests/httpx/http.client) — 0건. 봇은 네트워크를 셸로 친 적 없음.
+---
+B. python3 보안 구멍 발견과 해결
+B-1. 구멍 [확정]
+python3를 allowlist에 넣으면 `python3 -c "import urllib...외부전송"` 한 줄로 .env 유출 가능. curl 차단이 무의미해짐.
+B-2. 점검 4 — 패턴 매칭 의미론 확인 [확정]
+OpenClaw dist에서 exec-approvals 매칭 로직을 끝까지 추적:
+항목	결과
+매칭 단위	세그먼트별 argv (파이프·연쇄 분해, 각각 검사)
+실행파일 패턴	glob → 정규식 컴파일, basename/realpath 매칭
+인자 패턴	argPattern 정규식 (argv[1:].join에 매칭)
+셸 래퍼	sh -c / bash -c 내부 명령 추출 → 재귀 검사 (depth≤3)
+서브셸/백틱	안전 분석 불가 시 analysis.ok=false → 승인 요청
+인터프리터 인라인	strictInlineEval 내장 기능으로 별도 탐지
+B-3. strictInlineEval [확정]
+`tools.exec.strictInlineEval: true` 플래그:
+python3 -c → 인라인 eval 탐지 → 헤드리스에서 거부
+python3 script.py → 그대로 통과
+대상 인터프리터: python/python2/python3/pypy/pypy3(-c), node/nodejs/bun/deno(-e/--eval), ruby(-e), perl(-e/-E), php(-r), lua(-e), osascript(-e)
+doctor 감사에서도 인터프리터 allowlist 시 strictInlineEval 경고 출력
+B-4. 봇 python3 호출 실측 [확정]
+봇	python3 -c (인라인)	python3 file.py	비율
+main	54건 (고유 1종)	0	100% 인라인
+scout	112건 (고유 7종)	0	100% 인라인
+전부 env 키 스캔 용도. strictInlineEval 적용 시 100% 승인 대상 — 이것이 정확히 차단 목표.
+B-5. echo 안전성 [확정]
+양쪽 리다이렉션(>) 0건, 서브셸 0건. 평문 출력만. allowlist에 넣어도 위험 낮음.
+---
+C. 화이트리스트 확정 및 적용
+C-1. 최종 화이트리스트 [승인]
+파일: `~/.openclaw/exec-approvals.json`
+```json
+{
+  "version": 1,
+  "defaults": {
+    "security": "allowlist",
+    "ask": "on-miss",
+    "askFallback": "deny"
+  },
+  "tools": {
+    "exec": { "strictInlineEval": true }
+  },
+  "agents": {
+    "main": { "allowlist": [
+      {"pattern":"cat"},{"pattern":"ls"},{"pattern":"which"},
+      {"pattern":"diff"},{"pattern":"tail"},{"pattern":"head"},
+      {"pattern":"grep"},{"pattern":"echo"},{"pattern":"env"},
+      {"pattern":"printenv"},{"pattern":"python3"},
+      {"pattern":"notion"},{"pattern":"ntn"},
+      {"pattern":"openclaw"}
+    ]},
+    "scout": { "allowlist": [
+      {"pattern":"cat"},{"pattern":"ls"},{"pattern":"which"},
+      {"pattern":"diff"},{"pattern":"tail"},{"pattern":"head"},
+      {"pattern":"grep"},{"pattern":"echo"},{"pattern":"env"},
+      {"pattern":"printenv"},{"pattern":"python3"},
+      {"pattern":"openclaw"}
+    ]}
+  }
+}
+```
+C-2. 적용 검증 [확정]
+JSON 파싱: `python3 -c "import json; json.load(...)"` 통과
+파일 권한: 644, 865 bytes
+agents 키: main/scout 2개 확인
+strictInlineEval: true 존재 확인
+재시작 불필요(매 exec마다 on-demand 읽기)
+롤백: 파일 삭제 → full bypass 복귀
+---
+D. 승인자(approvers) 설정
+D-1. approvers 위치 [확정]
+exec-approvals.json이 아닌 `openclaw.json`의 `channels.slack.accounts.<계정>.execApprovals.approvers`에 위치.
+형식: 슬랙 유저 ID 배열. 허용 표기: U***, user:U***, <@U***>.
+D-2. ID 확인 [확정]
+로그에서 발견된 U0BC2U5THM2 → 송태섭(봇) ID였음. 이사장 ID 아님
+이사장 실제 ID: 슬랙에서 직접 확인하여 등록
+교훈: 로그 ID를 검증 없이 적용하지 말 것
+D-3. 적용 [확정]
+openclaw.json의 default/scout 계정에 execApprovals.approvers 추가. 핫리로드 확인(gateway.log에서 config hot reload applied × 2).
+---
+E. 슬랙 승인 클라이언트 미작동 [TODO]
+E-1. 증상
+allowlist 밖 명령(rm) 시 승인 대기 타임아웃 → deny. 3회 시도 동일.
+E-2. 원인 분석
+`enabled` 기본값 = `"auto"` (approvers ≥ 1이면 true 평가) → 설정상 켜짐
+게이트웨이 재시작(PID 변경 확인, clean shutdown → ready) 후에도 동일
+네이티브 승인 클라이언트가 실제로 슬랙 DM을 발송한 흔적 0
+로그에 승인 클라이언트 초기화 전용 로그가 없어 활성화 여부 불명
+E-3. 판정 [승인]
+슬랙 승인은 부가 기능. 핵심 목적(.env 키 유출 차단)은 `askFallback: deny`로 이미 달성. allowlist 밖 = 무조건 거부, 진짜 필요하면 Terminal 직접 실행. 추가 디버깅은 보류.
+---
+F. 현재 보호 상태 종합
+계층	방식	상태
+1층: 로직 불변	schg (5개 파일)	작동 중
+2층: 셸 명령 제한	exec-approvals allowlist	작동 중
+2층 보강: 인라인 eval 차단	strictInlineEval	작동 중
+2층 보강: 키 유출 차단	curl/wget/nc 거부	작동 중
+승인 경로	슬랙 네이티브	미작동 (보류)
+---
+G. 부수 확인: 날씨 API 브리핑 추가 가능성
+data-go-kr-mcp 리포(공공데이터포털 MCP 서버) 확인. 기상청 단기예보 API를 MCP로 감싼 것.
+이사장 목적은 "일일 브리핑에 날씨 한 줄 추가"
+한나에게 MCP로 물리는 것(대화형)은 가능하나, 브리핑은 cron이 돌리므로 MCP 경로로는 안 닿음
+정답: `weather_fetch.py` 추가해 cron 파이프라인에 직접 끼움 (market_fetch·news_fetch와 동일 구조)
+공공데이터포털 가입 → 단기예보 활용신청 → 서비스키 발급 필요 [TODO]
+---
+미해결
+항목	상태	비고
+슬랙 승인 클라이언트	보류	핵심 목적 달성으로 우선순위 하락
+openclaw status allowlist 매칭	미확인	allowlist에 있는데 막힌 원인 미규명
+CP17 sunday/monday LLM 검증	미수행	schg 상태라 수정 시 noschg 먼저
+V2 첫 기능 mode_override	다음 착수	config.json 읽기, CP17 mode 구조 재활용
+날씨 브리핑 추가	검토	weather_fetch.py, 공공데이터포털 키 발급 필요
+SCHD 종목 추가	미반영	V2 watchlist config로 해결 예정
+
