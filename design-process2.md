@@ -570,89 +570,95 @@ config.json은 그대로 쓰기 가능.
 - 평일 브리핑 무손상 최우선
 - 안전장치가 본체를 안 깨뜨리는지 구조부터 검증(브리핑↔봇 분리 확인)
 
-북산 비서실 — exec-approvals 화이트리스트 적용 기록
+# 북산 비서실 — exec-approvals 화이트리스트 적용 기록
 
+> 날짜: 2026-06-25
+> 선행: V2 안전장치 1차(schg) 적용 완료, 6/24 무인 브리핑 정상 검증
+> 상태: exec-approvals 적용 완료, 슬랙 승인 클라이언트 미작동 보류
+> 결정 태그: [확정] 이사장 명시 / [승인] 제안→승인 / [추론] 맥락 기본값 / [TODO] 미해결
 
-날짜: 2026-06-25
-선행: V2 안전장치 1차(schg) 적용 완료, 6/24 무인 브리핑 정상 검증
-상태: exec-approvals 적용 완료, 슬랙 승인 클라이언트 미작동 보류
-결정 태그: [확정] 이사장 명시 / [승인] 제안→승인 / [추론] 맥락 기본값 / [TODO] 미해결
+---
 
-
-
-
-A. 사전 점검 (점검 1~3)
+## A. 사전 점검 (점검 1~3)
 
 exec-approvals.json 적용 전, 봇의 실제 셸 사용 실태를 읽기 전용으로 조사했다.
 
-A-1. 웹 도구의 셸 의존성 [확정]
+### A-1. 웹 도구의 셸 의존성 [확정]
 
 web_search/web_fetch 구현 체인을 dist 끝까지 추적:
+- 최종 네트워크 계층: `fetch-guard` → `globalThis.fetch` (Node 내장) + `undici` (Node 내장 HTTP)
+- child_process/exec/spawn/curl/wget: 전 구간 0건
+- **결론**: curl을 allowlist에서 빼도 봇 웹 기능 안 깨짐 [확정]
 
-
-최종 네트워크 계층: fetch-guard → globalThis.fetch (Node 내장) + undici (Node 내장 HTTP)
-child_process/exec/spawn/curl/wget: 전 구간 0건
-결론: curl을 allowlist에서 빼도 봇 웹 기능 안 깨짐 [확정]
-
-
-A-2. 봇 실제 exec 명령 목록화 [확정]
+### A-2. 봇 실제 exec 명령 목록화 [확정]
 
 데이터 범위: 2026-06-20~21 (실 세션 로그 약 2일치, 시드의 "90일"은 보관 한도와 불일치)
 
-봇주요 바이너리건수main (한나)grep 162, head 142, openclaw 77, cat 58, env 54, python3 54, echo 44, rm 34, which 20, tail 15, ls 14, notion 10, ntn 10, printenv 10278scout (송태섭)cat 128, python3 112, ls 100, head 96, grep 80, echo 50, openclaw 48, tail 34, env 16, diff 16292
+| 봇 | 주요 바이너리 | 건수 |
+|---|---|---|
+| main (한나) | grep 162, head 142, openclaw 77, cat 58, env 54, python3 54, echo 44, rm 34, which 20, tail 15, ls 14, notion 10, ntn 10, printenv 10 | 278 |
+| scout (송태섭) | cat 128, python3 112, ls 100, head 96, grep 80, echo 50, openclaw 48, tail 34, env 16, diff 16 | 292 |
 
+- 초안 대비 누락: grep, head, echo, python3, notion/ntn → 추가 필요 [확정]
+- rm 34건: 전량 BOOTSTRAP.md 정리. allowlist 제외(ask 대상) [승인]
+- openclaw 서브명령: status/gateway/dashboard — 기존 목록 그대로 [확정]
 
-초안 대비 누락: grep, head, echo, python3, notion/ntn → 추가 필요 [확정]
-rm 34건: 전량 BOOTSTRAP.md 정리. allowlist 제외(ask 대상) [승인]
-openclaw 서브명령: status/gateway/dashboard — 기존 목록 그대로 [확정]
-
-
-A-3. curl/wget/nc 셸 사용 이력 [확정]
+### A-3. curl/wget/nc 셸 사용 이력 [확정]
 
 양쪽 봇 0건. python3 내부까지 전수 검사(urllib/requests/httpx/http.client) — 0건. 봇은 네트워크를 셸로 친 적 없음.
 
+---
 
-B. python3 보안 구멍 발견과 해결
+## B. python3 보안 구멍 발견과 해결
 
-B-1. 구멍 [확정]
+### B-1. 구멍 [확정]
 
-python3를 allowlist에 넣으면 python3 -c "import urllib...외부전송" 한 줄로 .env 유출 가능. curl 차단이 무의미해짐.
+python3를 allowlist에 넣으면 `python3 -c "import urllib...외부전송"` 한 줄로 .env 유출 가능. curl 차단이 무의미해짐.
 
-B-2. 점검 4 — 패턴 매칭 의미론 확인 [확정]
+### B-2. 점검 4 — 패턴 매칭 의미론 확인 [확정]
 
 OpenClaw dist에서 exec-approvals 매칭 로직을 끝까지 추적:
 
-항목결과매칭 단위세그먼트별 argv (파이프·연쇄 분해, 각각 검사)실행파일 패턴glob → 정규식 컴파일, basename/realpath 매칭인자 패턴argPattern 정규식 (argv[1:].join에 매칭)셸 래퍼sh -c / bash -c 내부 명령 추출 → 재귀 검사 (depth≤3)서브셸/백틱안전 분석 불가 시 analysis.ok=false → 승인 요청인터프리터 인라인strictInlineEval 내장 기능으로 별도 탐지
+| 항목 | 결과 |
+|---|---|
+| 매칭 단위 | 세그먼트별 argv (파이프·연쇄 분해, 각각 검사) |
+| 실행파일 패턴 | glob → 정규식 컴파일, basename/realpath 매칭 |
+| 인자 패턴 | argPattern 정규식 (argv[1:].join에 매칭) |
+| 셸 래퍼 | sh -c / bash -c 내부 명령 추출 → 재귀 검사 (depth≤3) |
+| 서브셸/백틱 | 안전 분석 불가 시 analysis.ok=false → 승인 요청 |
+| 인터프리터 인라인 | strictInlineEval 내장 기능으로 별도 탐지 |
 
-B-3. strictInlineEval [확정]
+### B-3. strictInlineEval [확정]
 
-tools.exec.strictInlineEval: true 플래그:
+`tools.exec.strictInlineEval: true` 플래그:
+- python3 -c → 인라인 eval 탐지 → 헤드리스에서 거부
+- python3 script.py → 그대로 통과
+- 대상 인터프리터: python/python2/python3/pypy/pypy3(-c), node/nodejs/bun/deno(-e/--eval), ruby(-e), perl(-e/-E), php(-r), lua(-e), osascript(-e)
+- doctor 감사에서도 인터프리터 allowlist 시 strictInlineEval 경고 출력
 
+### B-4. 봇 python3 호출 실측 [확정]
 
-python3 -c → 인라인 eval 탐지 → 헤드리스에서 거부
-python3 script.py → 그대로 통과
-대상 인터프리터: python/python2/python3/pypy/pypy3(-c), node/nodejs/bun/deno(-e/--eval), ruby(-e), perl(-e/-E), php(-r), lua(-e), osascript(-e)
-doctor 감사에서도 인터프리터 allowlist 시 strictInlineEval 경고 출력
-
-
-B-4. 봇 python3 호출 실측 [확정]
-
-봇python3 -c (인라인)python3 file.py비율main54건 (고유 1종)0100% 인라인scout112건 (고유 7종)0100% 인라인
+| 봇 | python3 -c (인라인) | python3 file.py | 비율 |
+|---|---|---|---|
+| main | 54건 (고유 1종) | 0 | 100% 인라인 |
+| scout | 112건 (고유 7종) | 0 | 100% 인라인 |
 
 전부 env 키 스캔 용도. strictInlineEval 적용 시 100% 승인 대상 — 이것이 정확히 차단 목표.
 
-B-5. echo 안전성 [확정]
+### B-5. echo 안전성 [확정]
 
 양쪽 리다이렉션(>) 0건, 서브셸 0건. 평문 출력만. allowlist에 넣어도 위험 낮음.
 
+---
 
-C. 화이트리스트 확정 및 적용
+## C. 화이트리스트 확정 및 적용
 
-C-1. 최종 화이트리스트 [승인]
+### C-1. 최종 화이트리스트 [승인]
 
-파일: ~/.openclaw/exec-approvals.json
+파일: `~/.openclaw/exec-approvals.json`
 
-json{
+```json
+{
   "version": 1,
   "defaults": {
     "security": "allowlist",
@@ -680,189 +686,226 @@ json{
     ]}
   }
 }
+```
 
-C-2. 적용 검증 [확정]
+### C-2. 적용 검증 [확정]
 
+- JSON 파싱: `python3 -c "import json; json.load(...)"` 통과
+- 파일 권한: 644, 865 bytes
+- agents 키: main/scout 2개 확인
+- strictInlineEval: true 존재 확인
+- 재시작 불필요(매 exec마다 on-demand 읽기)
+- 롤백: 파일 삭제 → full bypass 복귀
 
-JSON 파싱: python3 -c "import json; json.load(...)" 통과
-파일 권한: 644, 865 bytes
-agents 키: main/scout 2개 확인
-strictInlineEval: true 존재 확인
-재시작 불필요(매 exec마다 on-demand 읽기)
-롤백: 파일 삭제 → full bypass 복귀
+---
 
+## D. 승인자(approvers) 설정
 
+### D-1. approvers 위치 [확정]
 
-D. 승인자(approvers) 설정
-
-D-1. approvers 위치 [확정]
-
-exec-approvals.json이 아닌 openclaw.json의 channels.slack.accounts.<계정>.execApprovals.approvers에 위치.
+exec-approvals.json이 아닌 `openclaw.json`의 `channels.slack.accounts.<계정>.execApprovals.approvers`에 위치.
 형식: 슬랙 유저 ID 배열. 허용 표기: U***, user:U***, <@U***>.
 
-D-2. ID 확인 [확정]
+### D-2. ID 확인 [확정]
 
+- 로그에서 발견된 U0BC2U5THM2 → 송태섭(봇) ID였음. 이사장 ID 아님
+- 이사장 실제 ID: 슬랙에서 직접 확인하여 등록
+- 교훈: 로그 ID를 검증 없이 적용하지 말 것
 
-로그에서 발견된 U0BC2U5THM2 → 송태섭(봇) ID였음. 이사장 ID 아님
-이사장 실제 ID: 슬랙에서 직접 확인하여 등록
-교훈: 로그 ID를 검증 없이 적용하지 말 것
-
-
-D-3. 적용 [확정]
+### D-3. 적용 [확정]
 
 openclaw.json의 default/scout 계정에 execApprovals.approvers 추가. 핫리로드 확인(gateway.log에서 config hot reload applied × 2).
 
+---
 
-E. 슬랙 승인 클라이언트 미작동 [TODO]
+## E. 슬랙 승인 클라이언트 미작동 [TODO]
 
-E-1. 증상
+### E-1. 증상
 
 allowlist 밖 명령(rm) 시 승인 대기 타임아웃 → deny. 3회 시도 동일.
 
-E-2. 원인 분석
+### E-2. 원인 분석
 
+- `enabled` 기본값 = `"auto"` (approvers ≥ 1이면 true 평가) → 설정상 켜짐
+- 게이트웨이 재시작(PID 변경 확인, clean shutdown → ready) 후에도 동일
+- 네이티브 승인 클라이언트가 실제로 슬랙 DM을 발송한 흔적 0
+- 로그에 승인 클라이언트 초기화 전용 로그가 없어 활성화 여부 불명
 
-enabled 기본값 = "auto" (approvers ≥ 1이면 true 평가) → 설정상 켜짐
-게이트웨이 재시작(PID 변경 확인, clean shutdown → ready) 후에도 동일
-네이티브 승인 클라이언트가 실제로 슬랙 DM을 발송한 흔적 0
-로그에 승인 클라이언트 초기화 전용 로그가 없어 활성화 여부 불명
+### E-3. 판정 [승인]
 
+슬랙 승인은 부가 기능. 핵심 목적(.env 키 유출 차단)은 `askFallback: deny`로 이미 달성. allowlist 밖 = 무조건 거부, 진짜 필요하면 Terminal 직접 실행. 추가 디버깅은 보류.
 
-E-3. 판정 [승인]
+---
 
-슬랙 승인은 부가 기능. 핵심 목적(.env 키 유출 차단)은 askFallback: deny로 이미 달성. allowlist 밖 = 무조건 거부, 진짜 필요하면 Terminal 직접 실행. 추가 디버깅은 보류.
+## F. 현재 보호 상태 종합
 
+| 계층 | 방식 | 상태 |
+|---|---|---|
+| 1층: 로직 불변 | schg (5개 파일) | 작동 중 |
+| 2층: 셸 명령 제한 | exec-approvals allowlist | 작동 중 |
+| 2층 보강: 인라인 eval 차단 | strictInlineEval | 작동 중 |
+| 2층 보강: 키 유출 차단 | curl/wget/nc 거부 | 작동 중 |
+| 승인 경로 | 슬랙 네이티브 | 미작동 (보류) |
 
-F. 현재 보호 상태 종합
+---
 
-계층방식상태1층: 로직 불변schg (5개 파일)작동 중2층: 셸 명령 제한exec-approvals allowlist작동 중2층 보강: 인라인 eval 차단strictInlineEval작동 중2층 보강: 키 유출 차단curl/wget/nc 거부작동 중승인 경로슬랙 네이티브미작동 (보류)
-
-
-G. 부수 확인: 날씨 API 브리핑 추가 가능성
+## G. 부수 확인: 날씨 API 브리핑 추가 가능성
 
 data-go-kr-mcp 리포(공공데이터포털 MCP 서버) 확인. 기상청 단기예보 API를 MCP로 감싼 것.
 
+- 이사장 목적은 "일일 브리핑에 날씨 한 줄 추가"
+- 한나에게 MCP로 물리는 것(대화형)은 가능하나, 브리핑은 cron이 돌리므로 MCP 경로로는 안 닿음
+- 정답: `weather_fetch.py` 추가해 cron 파이프라인에 직접 끼움 (market_fetch·news_fetch와 동일 구조)
+- 공공데이터포털 가입 → 단기예보 활용신청 → 서비스키 발급 필요 [TODO]
 
-이사장 목적은 "일일 브리핑에 날씨 한 줄 추가"
-한나에게 MCP로 물리는 것(대화형)은 가능하나, 브리핑은 cron이 돌리므로 MCP 경로로는 안 닿음
-정답: weather_fetch.py 추가해 cron 파이프라인에 직접 끼움 (market_fetch·news_fetch와 동일 구조)
-공공데이터포털 가입 → 단기예보 활용신청 → 서비스키 발급 필요 [TODO]
+---
 
+## 미해결
 
+| 항목 | 상태 | 비고 |
+|---|---|---|
+| 슬랙 승인 클라이언트 | 보류 | 핵심 목적 달성으로 우선순위 하락 |
+| openclaw status allowlist 매칭 | 미확인 | allowlist에 있는데 막힌 원인 미규명 |
+| CP17 sunday/monday LLM 검증 | 미수행 | schg 상태라 수정 시 noschg 먼저 |
+| V2 첫 기능 mode_override | 다음 착수 | config.json 읽기, CP17 mode 구조 재활용 |
+| 날씨 브리핑 추가 | 검토 | weather_fetch.py, 공공데이터포털 키 발급 필요 |
+| SCHD 종목 추가 | 미반영 | V2 watchlist config로 해결 예정 |
 
-미해결
+# 북산 비서실 — V2 config 다리 구현 기록
 
-항목상태비고슬랙 승인 클라이언트보류핵심 목적 달성으로 우선순위 하락openclaw status allowlist 매칭미확인allowlist에 있는데 막힌 원인 미규명CP17 sunday/monday LLM 검증미수행schg 상태라 수정 시 noschg 먼저V2 첫 기능 mode_override다음 착수config.json 읽기, CP17 mode 구조 재활용날씨 브리핑 추가검토weather_fetch.py, 공공데이터포털 키 발급 필요SCHD 종목 추가미반영V2 watchlist config로 해결 예정
+> 날짜: 2026-06-25
+> 선행: exec-approvals 적용 완료 (19번), schg 로직 불변화
+> 상태: config 다리 구현 완료, 슬랙 테스트 3건 성공, schg 재적용
+> 결정 태그: [확정] 이사장 명시 / [승인] 제안→승인 / [추론] 맥락 기본값 / [TODO] 미해결
 
-북산 비서실 — V2 config 다리 구현 기록
+---
 
+## A. 슬랙 exec 승인 미작동 — 근본 원인 확정
 
-날짜: 2026-06-25
-선행: exec-approvals 적용 완료 (19번), schg 로직 불변화
-상태: config 다리 구현 완료, 슬랙 테스트 3건 성공, schg 재적용
-결정 태그: [확정] 이사장 명시 / [승인] 제안→승인 / [추론] 맥락 기본값 / [TODO] 미해결
-
-
-
-
-A. 슬랙 exec 승인 미작동 — 근본 원인 확정
-
-A-1. 원인 [확정]
+### A-1. 원인 [확정]
 
 OpenClaw 2026.6.8 빌드에 Slack 네이티브 exec 승인 DM 전달 런타임이 구현돼 있지 않음.
 
+- 네이티브 승인 capability 빌더/타깃 리졸버: Discord / Telegram / Signal / Matrix / GoogleChat에만 존재
+- `createSlack...Approval*`: dist 전체에 없음
+- Slack 프로바이더: `describeDeliveryCapabilities` 미등록 → 전달 게이트에서 `native = undefined` → DM 카드 전달 시도조차 안 함
+- `channels.slack.accounts.*.execApprovals.approvers`: 스키마 통과하지만 소비되지 않음 [확정]
 
-네이티브 승인 capability 빌더/타깃 리졸버: Discord / Telegram / Signal / Matrix / GoogleChat에만 존재
-createSlack...Approval*: dist 전체에 없음
-Slack 프로바이더: describeDeliveryCapabilities 미등록 → 전달 게이트에서 native = undefined → DM 카드 전달 시도조차 안 함
-channels.slack.accounts.*.execApprovals.approvers: 스키마 통과하지만 소비되지 않음 [확정]
-
-
-A-2. 판정 [승인]
+### A-2. 판정 [승인]
 
 현행 상태(allowlist + askFallback:deny)로 핵심 목적 달성. 추가 디버깅 보류. 기존 approvers 설정은 무해하므로 그대로 둠(향후 업데이트 시 활성화 가능).
 
-A-3. 작동 가능 경로 (참고, 미적용)
+### A-3. 작동 가능 경로 (참고, 미적용)
 
+- approvals.exec 포워딩 (일반 전달 파이프라인 + /approve)
+- 동일 채팅 /approve (기본 on, 테스트 시 미작동)
+- Web UI / TUI 승인 클라이언트
 
-approvals.exec 포워딩 (일반 전달 파이프라인 + /approve)
-동일 채팅 /approve (기본 on, 테스트 시 미작동)
-Web UI / TUI 승인 클라이언트
+---
 
+## B. config 다리 사전 확인
 
+### B-1. 봇 파일 쓰기 경로 [확정]
 
-B. config 다리 사전 확인
+봇의 파일 쓰기 도구(write/edit/apply_patch)는 Node 내장 `fs.promises`를 직접 호출. exec(셸) 경로 미사용.
 
-B-1. 봇 파일 쓰기 경로 [확정]
+- write 도구 → `writeFile(path, content, "utf-8")`, import는 `node:fs/promises`
+- apply_patch 도구 → `fs$1.writeFile(params.absolutePath, next, "utf-8")`
+- 샌드박스에서도 bridge RPC(exec 아님)
 
-봇의 파일 쓰기 도구(write/edit/apply_patch)는 Node 내장 fs.promises를 직접 호출. exec(셸) 경로 미사용.
+**결론**: exec-approvals의 영향을 받지 않음. 별도 .py 스크립트 불필요 [확정]
 
+### B-2. config.json 기존 구조 [확정]
 
-write 도구 → writeFile(path, content, "utf-8"), import는 node:fs/promises
-apply_patch 도구 → fs$1.writeFile(params.absolutePath, next, "utf-8")
-샌드박스에서도 bridge RPC(exec 아님)
-
-
-결론: exec-approvals의 영향을 받지 않음. 별도 .py 스크립트 불필요 [확정]
-
-B-2. config.json 기존 구조 [확정]
-
-json{
+```json
+{
   "indices": ["SPY", "QQQ", "DIA"],
   "watchlist": ["AMD", "ROKT", "GLW", "DELL", "ORCL"]
 }
+```
 
 설계서의 watchlist 단일 배열과 다름 → indices/watchlist 분리 구조를 유지하고 설계를 현실에 맞춤 [확정]
 
+---
 
-C. config 다리 항목 설계
+## C. config 다리 항목 설계
 
 발송 시각(crontab 조작 필요)만 제외, 나머지 전부 포함 [승인]
 
-항목config 필드유효값폴백읽는 스크립트지수 목록indices티커 배열["SPY","QQQ","DIA"]market_fetch.py종목 목록watchlist티커 배열["AMD","ROKT","GLW","DELL","ORCL"]market_fetch.py브리핑 모드mode_override.modeweekday/sunday/monday요일 자동 판단run_briefing.sh모드 지속성mode_override.typeonce/permanent—run_briefing.sh뉴스 카테고리news.categoriesAV 카테고리 배열["economy_macro","financial_markets"]news_fetch.py뉴스 건수news.count_per_category1~20 정수10news_fetch.py발송 채널send.channel슬랙 채널명.env SLACK_CHANNEL_IDsend_briefing.py브리핑 언어briefing.languageko/enkobriefing_llm.py요약 상세도briefing.detail_levelbrief/normal/detailednormalbriefing_llm.py날씨 포함weather.enabledtrue/falsefalserun_briefing.sh날씨 지역weather.region지역명서울weather_fetch.py
+| 항목 | config 필드 | 유효값 | 폴백 | 읽는 스크립트 |
+|---|---|---|---|---|
+| 지수 목록 | indices | 티커 배열 | ["SPY","QQQ","DIA"] | market_fetch.py |
+| 종목 목록 | watchlist | 티커 배열 | ["AMD","ROKT","GLW","DELL","ORCL"] | market_fetch.py |
+| 브리핑 모드 | mode_override.mode | weekday/sunday/monday | 요일 자동 판단 | run_briefing.sh |
+| 모드 지속성 | mode_override.type | once/permanent | — | run_briefing.sh |
+| 뉴스 카테고리 | news.categories | AV 카테고리 배열 | ["economy_macro","financial_markets"] | news_fetch.py |
+| 뉴스 건수 | news.count_per_category | 1~20 정수 | 10 | news_fetch.py |
+| 발송 채널 | send.channel | 슬랙 채널명 | .env SLACK_CHANNEL_ID | send_briefing.py |
+| 브리핑 언어 | briefing.language | ko/en | ko | briefing_llm.py |
+| 요약 상세도 | briefing.detail_level | brief/normal/detailed | normal | briefing_llm.py |
+| 날씨 포함 | weather.enabled | true/false | false | run_briefing.sh |
+| 날씨 지역 | weather.region | 지역명 | 서울 | weather_fetch.py |
 
+---
 
-D. 스크립트 수정 및 검증
+## D. 스크립트 수정 및 검증
 
-D-1. 수정 내용
+### D-1. 수정 내용
 
-스크립트변경비고run_briefing.shmode_override 읽기(우선순위: DOW < config < 환경변수), once 소진 삭제, weather 조건부 실행, 로그 보강MODE_SRC로 출처 추적market_fetch.pyindices/watchlist를 config에서 읽기, DEFAULT_INDICES/DEFAULT_WATCHLIST 폴백 상수 추가기존 config 누락 시 예외(코드2) → 폴백으로 개선news_fetch.pycategories/count 읽기, fetch_topic에 limit 인자 주입로그·출력도 동기화briefing_llm.pylanguage/detail_level 읽기, LLM 프롬프트에 지침 블록 주입작성·재작성 양쪽 적용send_briefing.pysend.channel 읽기, .env 폴백main()과 notify_failure() 양쪽 적용
+| 스크립트 | 변경 | 비고 |
+|---|---|---|
+| run_briefing.sh | mode_override 읽기(우선순위: DOW < config < 환경변수), once 소진 삭제, weather 조건부 실행, 로그 보강 | MODE_SRC로 출처 추적 |
+| market_fetch.py | indices/watchlist를 config에서 읽기, DEFAULT_INDICES/DEFAULT_WATCHLIST 폴백 상수 추가 | 기존 config 누락 시 예외(코드2) → 폴백으로 개선 |
+| news_fetch.py | categories/count 읽기, fetch_topic에 limit 인자 주입 | 로그·출력도 동기화 |
+| briefing_llm.py | language/detail_level 읽기, LLM 프롬프트에 지침 블록 주입 | 작성·재작성 양쪽 적용 |
+| send_briefing.py | send.channel 읽기, .env 폴백 | main()과 notify_failure() 양쪽 적용 |
 
-D-2. 검증 [확정]
+### D-2. 검증 [확정]
 
-파일검증결과run_briefing.shbash -nOKmarket_fetch.pypython3 -B -m py_compileOKnews_fetch.pypython3 -B -m py_compileOKbriefing_llm.pypython3 -B -m py_compileOKsend_briefing.pypython3 -B -m py_compileOK
+| 파일 | 검증 | 결과 |
+|---|---|---|
+| run_briefing.sh | bash -n | OK |
+| market_fetch.py | python3 -B -m py_compile | OK |
+| news_fetch.py | python3 -B -m py_compile | OK |
+| briefing_llm.py | python3 -B -m py_compile | OK |
+| send_briefing.py | python3 -B -m py_compile | OK |
 
-D-3. schg 재적용 [확정]
+### D-3. schg 재적용 [확정]
 
 5개 파일 전부 schg 플래그 확인됨 (ls -lO).
 
+---
 
-E. 한나 SOUL 규칙 추가 [확정]
+## E. 한나 SOUL 규칙 추가 [확정]
 
 ~/.openclaw/workspace/SOUL.md 끝에 config 다리 규칙 블록 추가 (3092 → 4409 bytes, 기존 내용 보존).
 
 규칙 6개:
+1. 변경 요청 시 유효값 확인, 무효 시 거부 + 유효값 안내
+2. mode_override만 "영구/1회" 확인. 나머지는 바로 적용
+3. json.load → 해당 필드만 수정 → json.dump (indent=2, ensure_ascii=False)
+4. 변경 후 결과 보고
+5. "원래대로 돌려" = 필드 삭제 → 폴백 복귀
+6. indices(지수)와 watchlist(종목) 구분
 
+---
 
-변경 요청 시 유효값 확인, 무효 시 거부 + 유효값 안내
-mode_override만 "영구/1회" 확인. 나머지는 바로 적용
-json.load → 해당 필드만 수정 → json.dump (indent=2, ensure_ascii=False)
-변경 후 결과 보고
-"원래대로 돌려" = 필드 삭제 → 폴백 복귀
-indices(지수)와 watchlist(종목) 구분
+## F. 슬랙 테스트 [확정]
 
-
-
-F. 슬랙 테스트 [확정]
-
-테스트시킨 말결과config 실측1"SCHD 종목 추가해"watchlist에 SCHD 추가["AMD","ROKT","GLW","DELL","ORCL","SCHD"]2"뉴스 5건으로 줄여"count_per_category 변경53"일요일 모드를 monday로 바꿔"once/permanent 확인 → "이번 한번만" 선택mode_override: {mode:"monday", type:"once"}
+| 테스트 | 시킨 말 | 결과 | config 실측 |
+|---|---|---|---|
+| 1 | "SCHD 종목 추가해" | watchlist에 SCHD 추가 | ["AMD","ROKT","GLW","DELL","ORCL","SCHD"] |
+| 2 | "뉴스 5건으로 줄여" | count_per_category 변경 | 5 |
+| 3 | "일요일 모드를 monday로 바꿔" | once/permanent 확인 → "이번 한번만" 선택 | mode_override: {mode:"monday", type:"once"} |
 
 3건 전부 cat config.json으로 실측 확인.
 
+---
 
-G. 현재 config.json 상태
+## G. 현재 config.json 상태
 
-json{
+```json
+{
   "indices": ["SPY", "QQQ", "DIA"],
   "watchlist": ["AMD", "ROKT", "GLW", "DELL", "ORCL", "SCHD"],
   "news": {
@@ -875,10 +918,19 @@ json{
     "set_at": "2026-06-25T..."
   }
 }
+```
 
-미설정 필드(news.categories, send.channel, briefing., weather.)는 전부 하드코딩 폴백.
+미설정 필드(news.categories, send.channel, briefing.*, weather.*)는 전부 하드코딩 폴백.
 
+---
 
-미해결
+## 미해결
 
-항목상태비고내일 아침 브리핑 관찰대기SCHD 포함·뉴스 5건·monday 모드(once) 반영 확인 + once 소진 후 mode_override 자동 삭제 확인weather_fetch.py미생성공공데이터포털 서비스키 발급 선행CP17 sunday/monday LLM 검증미수행내일 once monday로 1회 실행될 예정 — 품질 확인 가능한나 능력 강화미착수스케줄·메모 등 일반 비서 기능. SOUL 설계 필요슬랙 exec 승인보류이 빌드에 Slack 네이티브 미구현. 현행 deny로 유지openclaw status allowlist 매칭미확인allowlist에 있는데 막힌 원인 미규명
+| 항목 | 상태 | 비고 |
+|---|---|---|
+| 내일 아침 브리핑 관찰 | 대기 | SCHD 포함·뉴스 5건·monday 모드(once) 반영 확인 + once 소진 후 mode_override 자동 삭제 확인 |
+| weather_fetch.py | 미생성 | 공공데이터포털 서비스키 발급 선행 |
+| CP17 sunday/monday LLM 검증 | 미수행 | 내일 once monday로 1회 실행될 예정 — 품질 확인 가능 |
+| 한나 능력 강화 | 미착수 | 스케줄·메모 등 일반 비서 기능. SOUL 설계 필요 |
+| 슬랙 exec 승인 | 보류 | 이 빌드에 Slack 네이티브 미구현. 현행 deny로 유지 |
+| openclaw status allowlist 매칭 | 미확인 | allowlist에 있는데 막힌 원인 미규명 |
